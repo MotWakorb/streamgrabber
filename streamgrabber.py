@@ -331,6 +331,24 @@ def parse_m3u(source, dedupe=False):
     return result
 
 
+def sort_data(data):
+    """Sort categories alphabetically and streams alphabetically within each category."""
+    for stype in data:
+        cats = data[stype]["categories"]
+        # Sort streams within each category
+        for cat in cats:
+            cat["streams"].sort(key=lambda s: (s.get("name") or "").lower())
+            # Re-number stream_ids after sort
+            for i, entry in enumerate(cat["streams"], 1):
+                entry["stream_id"] = i
+        # Sort categories by name
+        cats.sort(key=lambda c: c["category_name"].lower())
+        # Re-number category_ids after sort
+        for i, cat in enumerate(cats, 1):
+            cat["category_id"] = str(i)
+    return data
+
+
 def write_json(data, output_path):
     """Write data as JSON."""
     with open(output_path, "w", encoding="utf-8") as f:
@@ -531,7 +549,7 @@ const fmt = n => n.toLocaleString();
       grandOrig += info.original_total_streams;
     }
   }
-  if (grandOrig !== null && grandOrig !== grandTotal)
+  if (grandOrig !== null)
     el.innerHTML += `<span>Original: ${fmt(grandOrig)} | Deduped: ${fmt(grandTotal)}</span>`;
   else
     el.innerHTML += `<span>Total: ${fmt(grandTotal)} streams in ${grandCats} categories</span>`;
@@ -567,7 +585,7 @@ function renderCategory(cat, stype) {
   div.className = 'category';
   const count = cat.stream_count;
   let dedupHtml = '';
-  if ('original_stream_count' in cat && cat.original_stream_count !== count)
+  if ('original_stream_count' in cat)
     dedupHtml = `<span class="dedup-info">${cat.original_stream_count} orig</span>`;
   div.innerHTML = `<div class="cat-header"><span class="cat-name">${esc(cat.category_name)}</span>` +
     `<span class="cat-right">${dedupHtml}${fmt(count)} stream${count!==1?'s':''} ` +
@@ -829,6 +847,8 @@ def main():
 
         print("Fetching streams...", file=sys.stderr)
         data = gather_all(args.url, args.u, args.p, args.t)
+
+    sort_data(data)
 
     if args.f == "json":
         write_json(data, args.o)
