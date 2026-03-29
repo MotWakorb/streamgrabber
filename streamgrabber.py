@@ -1,16 +1,18 @@
 #!/usr/bin/env python3
 """
-StreamGrabber - Xtream Codes API client that retrieves all categories
-and their available streams, outputting to JSON or readable text.
+StreamGrabber - Xtream Codes API client and M3U parser that retrieves
+all categories and their available streams, outputting to JSON or readable text.
 """
 
 import argparse
 import json
+import re
 import sys
 import tty
 import termios
 import warnings
-from urllib.parse import urljoin
+from collections import OrderedDict
+from urllib.parse import urljoin, urlparse
 
 warnings.filterwarnings("ignore", message=".*urllib3.*OpenSSL.*")
 
@@ -153,6 +155,151 @@ def gather_all(server_url, username, password, stream_types=None):
     return result
 
 
+def parse_extinf(line):
+    """Parse a #EXTINF line into its attributes and display name."""
+    attrs = {}
+    # Extract key="value" pairs from the EXTINF line
+    for match in re.finditer(r'([\w-]+)="([^"]*)"', line):
+        attrs[match.group(1)] = match.group(2)
+    # Display name is everything after the last comma
+    comma_pos = line.rfind(",")
+    if comma_pos != -1:
+        attrs["_name"] = line[comma_pos + 1:].strip()
+    else:
+        attrs["_name"] = "Unknown"
+    return attrs
+
+
+def detect_stream_type(url):
+    """Detect stream type from URL path patterns."""
+    path = urlparse(url).path.lower()
+    if "/movie/" in path or "/movies/" in path:
+        return "vod"
+    if "/series/" in path:
+        return "series"
+    return "live"
+
+
+def guess_type_from_extension(url):
+    """Guess stream type from file extension as a fallback."""
+    path = urlparse(url).path.lower()
+    if path.endswith((".ts", ".m3u8")):
+        return "live"
+    if path.endswith((".mp4", ".mkv", ".avi")):
+        return "vod"
+    return "live"
+
+
+def parse_m3u(source):
+    """
+    Parse an M3U file or URL into the same structure as gather_all().
+    Groups streams by group-title, detects stream type from URL patterns.
+    """
+    if source.startswith(("http://", "https://")):
+        print(f"  Downloading M3U from URL...", file=sys.stderr)
+        resp = requests.get(source, timeout=60)
+        resp.raise_for_status()
+        content = resp.text
+    else:
+        print(f"  Reading M3U file: {source}", file=sys.stderr)
+        with open(source, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+
+    lines = content.splitlines()
+    if not lines or not lines[0].strip().startswith("#EXTM3U"):
+        print("Warning: file does not start with #EXTM3U header", file=sys.stderr)
+
+    # Parse entries: each entry is an EXTINF line followed by a URL line
+    # Group by (stream_type, group-title)
+    # Use OrderedDict to preserve category order as they appear in the file
+    groups = {}  # (type, group_title) -> list of stream entries
+    group_order = []  # track insertion order of (type, group_title)
+
+    attrs = None
+    total_parsed = 0
+    for line in lines:
+        line = line.strip()
+        if not line or line.startswith("#EXTM3U"):
+            continue
+        if line.startswith("#EXTINF"):
+            attrs = parse_extinf(line)
+            continue
+        if line.startswith("#"):
+            continue
+
+        # This is a URL line
+        url = line
+        if attrs is None:
+            # URL without preceding EXTINF, create a minimal entry
+            attrs = {"_name": url.split("/")[-1] or "Unknown"}
+
+        # Detect stream type from URL
+        stype = detect_stream_type(url)
+        if stype == "live":
+            stype = guess_type_from_extension(url)
+
+        group = attrs.get("group-title", "Uncategorized")
+        key = (stype, group)
+        if key not in groups:
+            groups[key] = []
+            group_order.append(key)
+
+        entry = {
+            "name": attrs.get("_name", "Unknown"),
+            "url": url,
+        }
+        # Include relevant metadata based on type
+        if stype == "live":
+            entry["epg_channel_id"] = attrs.get("tvg-id", "")
+            entry["stream_icon"] = attrs.get("tvg-logo", "")
+        elif stype == "vod":
+            entry["stream_icon"] = attrs.get("tvg-logo", "")
+            ext = url.rsplit(".", 1)[-1] if "." in url.split("/")[-1] else ""
+            entry["container_extension"] = ext
+        elif stype == "series":
+            entry["stream_icon"] = attrs.get("tvg-logo", "")
+
+        groups[key].append(entry)
+        total_parsed += 1
+        attrs = None
+
+    print(f"  Parsed {total_parsed} streams", file=sys.stderr)
+
+    # Build output structure identical to gather_all()
+    result = {}
+    cat_counter = {}  # auto-increment category IDs per type
+
+    for stype, group_title in group_order:
+        if stype not in result:
+            result[stype] = {
+                "total_categories": 0,
+                "total_streams": 0,
+                "categories": [],
+            }
+            cat_counter[stype] = 1
+
+        stream_list = groups[(stype, group_title)]
+        # Add stream_id based on position
+        for i, entry in enumerate(stream_list, 1):
+            entry["stream_id"] = i
+
+        result[stype]["categories"].append({
+            "category_id": str(cat_counter[stype]),
+            "category_name": group_title,
+            "stream_count": len(stream_list),
+            "streams": stream_list,
+        })
+        cat_counter[stype] += 1
+
+    # Update totals
+    for stype in result:
+        cats = result[stype]["categories"]
+        result[stype]["total_categories"] = len(cats)
+        result[stype]["total_streams"] = sum(c["stream_count"] for c in cats)
+
+    return result
+
+
 def write_json(data, output_path):
     """Write data as JSON."""
     with open(output_path, "w", encoding="utf-8") as f:
@@ -256,17 +403,21 @@ def prompt_stream_types():
 
 def main():
     parser = argparse.ArgumentParser(
-        description="StreamGrabber - Retrieve all categories and streams from an Xtream Codes server.",
+        description="StreamGrabber - Retrieve all categories and streams from an Xtream Codes server or M3U playlist.",
         epilog=(
             "examples:\n"
             "  %(prog)s http://example.com:8080 -u user -p pass\n"
             "  %(prog)s http://example.com:8080 -u user -p pass -t live vod\n"
-            "  %(prog)s http://example.com:8080 -u user -p pass -f text -o streams.txt\n"
+            "  %(prog)s -m playlist.m3u\n"
+            "  %(prog)s -m http://example.com/get.php?username=user&password=pass&type=m3u_plus\n"
+            "  %(prog)s -m playlist.m3u -f text -o streams.txt\n"
             "  %(prog)s                (run with no arguments for interactive prompts)"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
     parser.add_argument("url", nargs="?", default=None, help="server URL (e.g. http://example.com:8080)")
+    parser.add_argument("-m", default=None, metavar="M3U",
+                        help="M3U file path or URL (skips XC API, parses playlist directly)")
     parser.add_argument("-u", default=None, metavar="USER", help="account username")
     parser.add_argument("-p", default=None, metavar="PASS", help="account password")
     parser.add_argument("-t", nargs="+", choices=["live", "vod", "series"], default=None,
@@ -277,35 +428,52 @@ def main():
                         help="output file path (default: streams_output.json)")
     args = parser.parse_args()
 
-    if args.url is None:
-        args.url = input("Server URL: ").strip()
-    if args.u is None:
-        args.u = input("Username: ").strip()
-    if args.p is None:
-        args.p = input_password()
-    if args.t is None:
-        args.t = prompt_stream_types()
+    if args.m:
+        # M3U mode
+        print("Parsing M3U playlist...", file=sys.stderr)
+        try:
+            data = parse_m3u(args.m)
+        except requests.RequestException as e:
+            print(f"Download error: {e}", file=sys.stderr)
+            sys.exit(1)
+        except (OSError, IOError) as e:
+            print(f"File error: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    print("Authenticating...", file=sys.stderr)
-    try:
-        auth_data = authenticate(args.url, args.u, args.p)
-    except requests.RequestException as e:
-        print(f"Connection error: {e}", file=sys.stderr)
-        sys.exit(1)
-    except RuntimeError as e:
-        print(f"Error: {e}", file=sys.stderr)
-        sys.exit(1)
+        # Filter by stream types if specified
+        if args.t:
+            data = {k: v for k, v in data.items() if k in args.t}
+    else:
+        # Xtream Codes API mode
+        if args.url is None:
+            args.url = input("Server URL: ").strip()
+        if args.u is None:
+            args.u = input("Username: ").strip()
+        if args.p is None:
+            args.p = input_password()
+        if args.t is None:
+            args.t = prompt_stream_types()
 
-    user = auth_data["user_info"]
-    print(
-        f"Logged in as: {user.get('username')} | "
-        f"Status: {user.get('status')} | "
-        f"Expires: {user.get('exp_date', 'N/A')}",
-        file=sys.stderr,
-    )
+        print("Authenticating...", file=sys.stderr)
+        try:
+            auth_data = authenticate(args.url, args.u, args.p)
+        except requests.RequestException as e:
+            print(f"Connection error: {e}", file=sys.stderr)
+            sys.exit(1)
+        except RuntimeError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    print("Fetching streams...", file=sys.stderr)
-    data = gather_all(args.url, args.u, args.p, args.t)
+        user = auth_data["user_info"]
+        print(
+            f"Logged in as: {user.get('username')} | "
+            f"Status: {user.get('status')} | "
+            f"Expires: {user.get('exp_date', 'N/A')}",
+            file=sys.stderr,
+        )
+
+        print("Fetching streams...", file=sys.stderr)
+        data = gather_all(args.url, args.u, args.p, args.t)
 
     if args.f == "json":
         write_json(data, args.o)
