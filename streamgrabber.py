@@ -218,8 +218,10 @@ def parse_m3u(source, dedupe=False):
 
     attrs = None
     total_parsed = 0
+    total_original = 0
     seen_urls = set()
     dupes_skipped = 0
+    group_original_counts = {}  # (type, group_title) -> original count before dedup
     for line in lines:
         line = line.strip()
         if not line or line.startswith("#EXTM3U"):
@@ -232,25 +234,31 @@ def parse_m3u(source, dedupe=False):
 
         # This is a URL line
         url = line
-
-        if dedupe:
-            if url in seen_urls:
-                dupes_skipped += 1
-                attrs = None
-                continue
-            seen_urls.add(url)
-
         if attrs is None:
-            # URL without preceding EXTINF, create a minimal entry
             attrs = {"_name": url.split("/")[-1] or "Unknown"}
 
-        # Detect stream type from URL
+        # Detect stream type and group for every entry (including dupes)
         stype = detect_stream_type(url)
         if stype == "live":
             stype = guess_type_from_extension(url)
-
         group = attrs.get("group-title", "Uncategorized")
         key = (stype, group)
+
+        total_original += 1
+        if dedupe:
+            group_original_counts[key] = group_original_counts.get(key, 0) + 1
+            # Track group order even for fully-deduped groups
+            if key not in groups:
+                groups[key] = []
+                group_order.append(key)
+
+        if dedupe and url in seen_urls:
+            dupes_skipped += 1
+            attrs = None
+            continue
+        if dedupe:
+            seen_urls.add(url)
+
         if key not in groups:
             groups[key] = []
             group_order.append(key)
@@ -296,12 +304,17 @@ def parse_m3u(source, dedupe=False):
         for i, entry in enumerate(stream_list, 1):
             entry["stream_id"] = i
 
-        result[stype]["categories"].append({
+        cat_entry = {
             "category_id": str(cat_counter[stype]),
             "category_name": group_title,
             "stream_count": len(stream_list),
             "streams": stream_list,
-        })
+        }
+        if dedupe:
+            original = group_original_counts.get((stype, group_title), len(stream_list))
+            cat_entry["original_stream_count"] = original
+
+        result[stype]["categories"].append(cat_entry)
         cat_counter[stype] += 1
 
     # Update totals
@@ -309,6 +322,10 @@ def parse_m3u(source, dedupe=False):
         cats = result[stype]["categories"]
         result[stype]["total_categories"] = len(cats)
         result[stype]["total_streams"] = sum(c["stream_count"] for c in cats)
+        if dedupe:
+            result[stype]["original_total_streams"] = sum(
+                c["original_stream_count"] for c in cats
+            )
 
     return result
 
@@ -327,14 +344,28 @@ def write_text(data, output_path):
             header = stype.upper()
             f.write(f"{'=' * 60}\n")
             f.write(f"  {header} STREAMS\n")
-            f.write(
-                f"  Categories: {type_info['total_categories']}  |  "
-                f"Total Streams: {type_info['total_streams']}\n"
-            )
+            if "original_total_streams" in type_info:
+                f.write(
+                    f"  Categories: {type_info['total_categories']}  |  "
+                    f"Original: {type_info['original_total_streams']}  |  "
+                    f"After Dedup: {type_info['total_streams']}\n"
+                )
+            else:
+                f.write(
+                    f"  Categories: {type_info['total_categories']}  |  "
+                    f"Total Streams: {type_info['total_streams']}\n"
+                )
             f.write(f"{'=' * 60}\n\n")
 
             for group in type_info["categories"]:
-                f.write(f"--- {group['category_name']} ({group['stream_count']} streams) ---\n")
+                if "original_stream_count" in group:
+                    f.write(
+                        f"--- {group['category_name']} "
+                        f"(original: {group['original_stream_count']}, "
+                        f"deduped: {group['stream_count']}) ---\n"
+                    )
+                else:
+                    f.write(f"--- {group['category_name']} ({group['stream_count']} streams) ---\n")
                 for i, stream in enumerate(group["streams"], 1):
                     f.write(f"  {i:>4}. {stream['name']}\n")
                 f.write("\n")
@@ -498,11 +529,19 @@ def main():
 
     # Summary
     for stype, info in data.items():
-        print(
-            f"  {stype}: {info['total_categories']} categories, "
-            f"{info['total_streams']} streams",
-            file=sys.stderr,
-        )
+        if "original_total_streams" in info:
+            print(
+                f"  {stype}: {info['total_categories']} categories, "
+                f"{info['original_total_streams']} original -> "
+                f"{info['total_streams']} after dedup",
+                file=sys.stderr,
+            )
+        else:
+            print(
+                f"  {stype}: {info['total_categories']} categories, "
+                f"{info['total_streams']} streams",
+                file=sys.stderr,
+            )
     print("Done.", file=sys.stderr)
 
 
