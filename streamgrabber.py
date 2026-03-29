@@ -190,10 +190,11 @@ def guess_type_from_extension(url):
     return "live"
 
 
-def parse_m3u(source):
+def parse_m3u(source, dedupe=False):
     """
     Parse an M3U file or URL into the same structure as gather_all().
     Groups streams by group-title, detects stream type from URL patterns.
+    If dedupe is True, duplicate URLs are skipped (first occurrence wins).
     """
     if source.startswith(("http://", "https://")):
         print(f"  Downloading M3U from URL...", file=sys.stderr)
@@ -217,6 +218,8 @@ def parse_m3u(source):
 
     attrs = None
     total_parsed = 0
+    seen_urls = set()
+    dupes_skipped = 0
     for line in lines:
         line = line.strip()
         if not line or line.startswith("#EXTM3U"):
@@ -229,6 +232,14 @@ def parse_m3u(source):
 
         # This is a URL line
         url = line
+
+        if dedupe:
+            if url in seen_urls:
+                dupes_skipped += 1
+                attrs = None
+                continue
+            seen_urls.add(url)
+
         if attrs is None:
             # URL without preceding EXTINF, create a minimal entry
             attrs = {"_name": url.split("/")[-1] or "Unknown"}
@@ -263,6 +274,8 @@ def parse_m3u(source):
         total_parsed += 1
         attrs = None
 
+    if dedupe and dupes_skipped:
+        print(f"  Removed {dupes_skipped} duplicate URLs", file=sys.stderr)
     print(f"  Parsed {total_parsed} streams", file=sys.stderr)
 
     # Build output structure identical to gather_all()
@@ -410,6 +423,7 @@ def main():
             "  %(prog)s http://example.com:8080 -u user -p pass -t live vod\n"
             "  %(prog)s -m playlist.m3u\n"
             "  %(prog)s -m http://example.com/get.php?username=user&password=pass&type=m3u_plus\n"
+            "  %(prog)s -m playlist.m3u -d\n"
             "  %(prog)s -m playlist.m3u -f text -o streams.txt\n"
             "  %(prog)s                (run with no arguments for interactive prompts)"
         ),
@@ -418,6 +432,8 @@ def main():
     parser.add_argument("url", nargs="?", default=None, help="server URL (e.g. http://example.com:8080)")
     parser.add_argument("-m", default=None, metavar="M3U",
                         help="M3U file path or URL (skips XC API, parses playlist directly)")
+    parser.add_argument("-d", action="store_true",
+                        help="deduplicate streams by URL (M3U mode only, keeps first occurrence)")
     parser.add_argument("-u", default=None, metavar="USER", help="account username")
     parser.add_argument("-p", default=None, metavar="PASS", help="account password")
     parser.add_argument("-t", nargs="+", choices=["live", "vod", "series"], default=None,
@@ -432,7 +448,7 @@ def main():
         # M3U mode
         print("Parsing M3U playlist...", file=sys.stderr)
         try:
-            data = parse_m3u(args.m)
+            data = parse_m3u(args.m, dedupe=args.d)
         except requests.RequestException as e:
             print(f"Download error: {e}", file=sys.stderr)
             sys.exit(1)

@@ -29,6 +29,7 @@ python streamgrabber.py http://example.com:8080 -u myuser -p mypass
 |------|-------------|---------|
 | `url` | Server URL (positional, for XC API mode) | prompt |
 | `-m M3U` | M3U file path or URL (skips XC API) | |
+| `-d` | Deduplicate streams by URL (M3U mode, keeps first) | off |
 | `-u USER` | Account username (XC API mode) | prompt |
 | `-p PASS` | Account password (XC API mode) | prompt (masked) |
 | `-t TYPE [...]` | Stream types: `live`, `vod`, `series` | prompt / all |
@@ -49,6 +50,7 @@ python streamgrabber.py http://example.com:8080 -u user -p pass -t live vod
 
 ```
 python streamgrabber.py -m playlist.m3u
+python streamgrabber.py -m playlist.m3u -d
 python streamgrabber.py -m http://example.com/get.php?username=user&password=pass&type=m3u_plus
 python streamgrabber.py -m playlist.m3u -t live -f text -o streams.txt
 ```
@@ -112,6 +114,7 @@ When using `-m`, StreamGrabber parses extended M3U playlists (`#EXTM3U` / `#EXTI
 - EPG channel IDs come from `tvg-id`, icons from `tvg-logo`
 - Works with both local `.m3u` / `.m3u8` files and remote URLs
 - Use `-t` to filter to specific stream types after parsing
+- Use `-d` to deduplicate streams by URL (first occurrence is kept, duplicates in later categories are removed)
 
 ## Stream type fields
 
