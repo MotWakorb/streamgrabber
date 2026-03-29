@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """
 StreamGrabber - Xtream Codes API client and M3U parser that retrieves
-all categories and their available streams, outputting to JSON or readable text.
+all categories and their available streams, outputting to JSON, text, or HTML.
 """
 
 import argparse
+import html as html_mod
 import json
 import re
 import sys
@@ -375,6 +376,312 @@ def write_text(data, output_path):
     print(f"Text output written to: {output_path}", file=sys.stderr)
 
 
+def write_html(data, output_path):
+    """Write data as a styled, interactive HTML page with lazy rendering."""
+    # Embed data as JSON; the page renders streams on demand via JS
+    data_json = json.dumps(data, ensure_ascii=False)
+
+    html_content = """<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>StreamGrabber</title>
+<style>
+  :root {
+    --bg: #0f1117; --surface: #1a1d27; --surface2: #242836;
+    --border: #2e3347; --text: #e4e6f0; --text2: #9498b0;
+    --accent: #6c72cb; --accent2: #4a4fb0;
+    --live: #43b581; --vod: #f59e42; --series: #e05d6f;
+  }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    background: var(--bg); color: var(--text); line-height: 1.5;
+    min-height: 100vh;
+  }
+  .header {
+    background: linear-gradient(135deg, var(--accent2), var(--accent));
+    padding: 2rem 2rem 1.5rem; text-align: center;
+  }
+  .header h1 { font-size: 1.8rem; font-weight: 700; margin-bottom: .3rem; }
+  .header .stats {
+    font-size: .95rem; opacity: .9; display: flex;
+    justify-content: center; gap: 1.5rem; flex-wrap: wrap;
+  }
+  .header .stats span { white-space: nowrap; }
+  .search-bar {
+    max-width: 700px; margin: 1.2rem auto 0; position: relative;
+  }
+  .search-bar input {
+    width: 100%; padding: .65rem 1rem .65rem 2.4rem;
+    border: 1px solid rgba(255,255,255,.2); border-radius: 8px;
+    background: rgba(0,0,0,.25); color: #fff; font-size: .95rem;
+    outline: none; transition: border-color .2s;
+  }
+  .search-bar input:focus { border-color: rgba(255,255,255,.5); }
+  .search-bar input::placeholder { color: rgba(255,255,255,.5); }
+  .search-bar svg {
+    position: absolute; left: .75rem; top: 50%;
+    transform: translateY(-50%); opacity: .5;
+  }
+  .search-count {
+    text-align: center; margin-top: .6rem; font-size: .85rem;
+    opacity: .8; min-height: 1.3em;
+  }
+  .container { max-width: 1100px; margin: 0 auto; padding: 1.5rem 1rem 3rem; }
+  .type-section { margin-bottom: 2rem; }
+  .type-header {
+    display: flex; align-items: center; gap: .75rem;
+    margin-bottom: 1rem; padding-bottom: .5rem; border-bottom: 2px solid var(--border);
+  }
+  .type-badge {
+    padding: .25rem .75rem; border-radius: 4px;
+    font-weight: 700; font-size: .8rem; text-transform: uppercase; letter-spacing: .05em;
+  }
+  .type-badge.live { background: var(--live); }
+  .type-badge.vod { background: var(--vod); color: #000; }
+  .type-badge.series { background: var(--series); }
+  .type-stats { color: var(--text2); font-size: .9rem; }
+  .category {
+    background: var(--surface); border: 1px solid var(--border);
+    border-radius: 8px; margin-bottom: .6rem; overflow: hidden;
+  }
+  .cat-header {
+    display: flex; align-items: center; justify-content: space-between;
+    padding: .75rem 1rem; cursor: pointer; user-select: none;
+    transition: background .15s;
+  }
+  .cat-header:hover { background: var(--surface2); }
+  .cat-name { font-weight: 600; font-size: .95rem; }
+  .cat-right {
+    font-size: .8rem; color: var(--text2); white-space: nowrap;
+    display: flex; align-items: center; gap: .5rem;
+  }
+  .dedup-info { color: var(--series); font-size: .75rem; }
+  .chevron {
+    transition: transform .2s; font-size: .7rem; color: var(--text2); margin-left: .5rem;
+  }
+  .category.open .chevron { transform: rotate(90deg); }
+  .cat-body { display: none; border-top: 1px solid var(--border); }
+  .category.open .cat-body { display: block; }
+  .stream-row {
+    display: flex; align-items: center; padding: .45rem .75rem;
+    border-bottom: 1px solid var(--border); font-size: .88rem;
+    transition: background .1s;
+  }
+  .stream-row:last-child { border-bottom: none; }
+  .stream-row:hover { background: var(--surface2); }
+  .s-num { color: var(--text2); width: 3rem; text-align: right;
+           font-size: .8rem; flex-shrink: 0; margin-right: .75rem; }
+  .s-icon {
+    width: 28px; height: 28px; border-radius: 4px; object-fit: contain;
+    background: var(--surface2); flex-shrink: 0; margin-right: .6rem;
+  }
+  .s-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  .s-meta { color: var(--text2); font-size: .78rem; margin-left: .75rem;
+            white-space: nowrap; flex-shrink: 0; }
+  .no-results {
+    text-align: center; padding: 3rem 1rem; color: var(--text2);
+    font-size: 1.1rem; display: none;
+  }
+  .no-results.visible { display: block; }
+  @media (max-width: 600px) {
+    .header { padding: 1.2rem 1rem 1rem; }
+    .header h1 { font-size: 1.4rem; }
+    .container { padding: 1rem .5rem 2rem; }
+    .s-meta { display: none; }
+  }
+</style>
+</head>
+<body>
+<div class="header">
+  <h1>StreamGrabber</h1>
+  <div class="stats" id="stats"></div>
+  <div class="search-bar">
+    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+      <circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>
+    </svg>
+    <input type="text" id="search" placeholder="Search streams..." autocomplete="off">
+  </div>
+  <div class="search-count" id="search-count"></div>
+</div>
+<div class="container" id="container">
+  <div id="no-results" class="no-results">No streams match your search.</div>
+</div>
+<script>
+const DATA = __DATA_PLACEHOLDER__;
+const typeLabels = {live:'Live', vod:'VOD', series:'Series'};
+const esc = s => {
+  const d = document.createElement('div'); d.textContent = s; return d.innerHTML;
+};
+const fmt = n => n.toLocaleString();
+
+// Build stats header
+(function() {
+  const el = document.getElementById('stats');
+  let grandTotal = 0, grandCats = 0, grandOrig = null;
+  for (const [stype, info] of Object.entries(DATA)) {
+    grandTotal += info.total_streams;
+    grandCats += info.total_categories;
+    const label = typeLabels[stype] || stype;
+    el.innerHTML += `<span>${esc(label)}: ${fmt(info.total_streams)} streams</span>`;
+    if ('original_total_streams' in info) {
+      if (grandOrig === null) grandOrig = 0;
+      grandOrig += info.original_total_streams;
+    }
+  }
+  if (grandOrig !== null && grandOrig !== grandTotal)
+    el.innerHTML += `<span>Original: ${fmt(grandOrig)} | Deduped: ${fmt(grandTotal)}</span>`;
+  else
+    el.innerHTML += `<span>Total: ${fmt(grandTotal)} streams in ${grandCats} categories</span>`;
+})();
+
+// Build category index for search (flat list of {name, lowerName, stype, catIdx, streamIdx})
+const searchIndex = [];
+for (const [stype, info] of Object.entries(DATA)) {
+  info.categories.forEach((cat, ci) => {
+    cat.streams.forEach((s, si) => {
+      searchIndex.push({name: s.name || 'Unknown', lower: (s.name||'').toLowerCase(), stype, ci, si});
+    });
+  });
+}
+
+function renderStreamRow(stream, num) {
+  const icon = stream.stream_icon || stream.cover || '';
+  const metaParts = [];
+  if (stream.epg_channel_id) metaParts.push(esc(stream.epg_channel_id));
+  if (stream.rating) metaParts.push('Rating: ' + esc(String(stream.rating)));
+  if (stream.container_extension) metaParts.push(esc(stream.container_extension.toUpperCase()));
+  const meta = metaParts.join(' \\u00b7 ');
+  let h = `<div class="stream-row"><span class="s-num">${num}</span>`;
+  if (icon) h += `<img class="s-icon" src="${esc(icon)}" alt="" loading="lazy" onerror="this.style.display='none'">`;
+  h += `<span class="s-name">${esc(stream.name||'Unknown')}</span>`;
+  if (meta) h += `<span class="s-meta">${meta}</span>`;
+  h += '</div>';
+  return h;
+}
+
+function renderCategory(cat, stype) {
+  const div = document.createElement('div');
+  div.className = 'category';
+  const count = cat.stream_count;
+  let dedupHtml = '';
+  if ('original_stream_count' in cat && cat.original_stream_count !== count)
+    dedupHtml = `<span class="dedup-info">${cat.original_stream_count} orig</span>`;
+  div.innerHTML = `<div class="cat-header"><span class="cat-name">${esc(cat.category_name)}</span>` +
+    `<span class="cat-right">${dedupHtml}${fmt(count)} stream${count!==1?'s':''} ` +
+    `<span class="chevron">&#9654;</span></span></div><div class="cat-body"></div>`;
+  let rendered = false;
+  div.querySelector('.cat-header').addEventListener('click', () => {
+    div.classList.toggle('open');
+    if (!rendered && div.classList.contains('open')) {
+      const body = div.querySelector('.cat-body');
+      const rows = cat.streams.map((s, i) => renderStreamRow(s, i + 1));
+      body.innerHTML = rows.join('');
+      rendered = true;
+    }
+  });
+  return div;
+}
+
+// Initial render: just category headers (no stream rows in DOM)
+(function() {
+  const container = document.getElementById('container');
+  for (const [stype, info] of Object.entries(DATA)) {
+    const sec = document.createElement('div');
+    sec.className = 'type-section';
+    sec.dataset.type = stype;
+    const badge = (stype === 'live' || stype === 'vod' || stype === 'series') ? stype : 'live';
+    const label = typeLabels[stype] || stype;
+    let statsText = `${info.total_categories} categories, ${fmt(info.total_streams)} streams`;
+    if ('original_total_streams' in info)
+      statsText += ` (from ${fmt(info.original_total_streams)} original)`;
+    sec.innerHTML = `<div class="type-header"><span class="type-badge ${badge}">${esc(label)}</span>` +
+      `<span class="type-stats">${esc(statsText)}</span></div>`;
+    info.categories.forEach(cat => sec.appendChild(renderCategory(cat, stype)));
+    container.appendChild(sec);
+  }
+})();
+
+// Search: filter categories, show matching streams in open categories
+let searchTimer;
+document.getElementById('search').addEventListener('input', function() {
+  clearTimeout(searchTimer);
+  const q = this.value.toLowerCase().trim();
+  searchTimer = setTimeout(() => doSearch(q), 150);
+});
+
+function doSearch(q) {
+  const noRes = document.getElementById('no-results');
+  const countEl = document.getElementById('search-count');
+  if (!q) {
+    // Reset: collapse all, show all categories
+    document.querySelectorAll('.type-section').forEach(s => s.style.display = '');
+    document.querySelectorAll('.category').forEach(c => {
+      c.style.display = '';
+      c.classList.remove('open');
+      const body = c.querySelector('.cat-body');
+      if (body) body.innerHTML = '';
+    });
+    noRes.classList.remove('visible');
+    countEl.textContent = '';
+    return;
+  }
+
+  // Search the index
+  const matches = {}; // "stype:catIdx" -> [streamIdx, ...]
+  let totalMatches = 0;
+  for (const entry of searchIndex) {
+    if (entry.lower.includes(q)) {
+      const key = entry.stype + ':' + entry.ci;
+      if (!matches[key]) matches[key] = [];
+      matches[key].push(entry.si);
+      totalMatches++;
+    }
+  }
+
+  countEl.textContent = totalMatches > 0 ? `${fmt(totalMatches)} match${totalMatches!==1?'es':''}` : '';
+
+  let anyVisible = false;
+  document.querySelectorAll('.type-section').forEach(sec => {
+    const stype = sec.dataset.type;
+    let secVisible = false;
+    const cats = sec.querySelectorAll('.category');
+    const info = DATA[stype];
+    cats.forEach((catEl, ci) => {
+      const key = stype + ':' + ci;
+      if (matches[key]) {
+        catEl.style.display = '';
+        catEl.classList.add('open');
+        secVisible = true;
+        // Render only matching streams
+        const cat = info.categories[ci];
+        const body = catEl.querySelector('.cat-body');
+        const rows = matches[key].map(si =>
+          renderStreamRow(cat.streams[si], si + 1)
+        );
+        body.innerHTML = rows.join('');
+      } else {
+        catEl.style.display = 'none';
+        catEl.classList.remove('open');
+      }
+    });
+    sec.style.display = secVisible ? '' : 'none';
+    if (secVisible) anyVisible = true;
+  });
+  noRes.classList.toggle('visible', !anyVisible);
+}
+</script>
+</body>
+</html>"""
+
+    html_content = html_content.replace("__DATA_PLACEHOLDER__", data_json, 1)
+    with open(output_path, "w", encoding="utf-8") as f:
+        f.write(html_content)
+    print(f"HTML output written to: {output_path}", file=sys.stderr)
+
+
 def input_password(prompt="Password: "):
     """Read password input, displaying * for each character."""
     sys.stderr.write(prompt)
@@ -455,6 +762,7 @@ def main():
             "  %(prog)s -m playlist.m3u\n"
             "  %(prog)s -m http://example.com/get.php?username=user&password=pass&type=m3u_plus\n"
             "  %(prog)s -m playlist.m3u -d\n"
+            "  %(prog)s -m playlist.m3u -f html -o streams.html\n"
             "  %(prog)s -m playlist.m3u -f text -o streams.txt\n"
             "  %(prog)s                (run with no arguments for interactive prompts)"
         ),
@@ -469,8 +777,8 @@ def main():
     parser.add_argument("-p", default=None, metavar="PASS", help="account password")
     parser.add_argument("-t", nargs="+", choices=["live", "vod", "series"], default=None,
                         metavar="TYPE", help="stream types to fetch: live, vod, series (default: prompt)")
-    parser.add_argument("-f", choices=["json", "text"], default="json", metavar="FMT",
-                        help="output format: json or text (default: json)")
+    parser.add_argument("-f", choices=["json", "text", "html"], default="json", metavar="FMT",
+                        help="output format: json, text, or html (default: json)")
     parser.add_argument("-o", default="streams_output.json", metavar="FILE",
                         help="output file path (default: streams_output.json)")
     args = parser.parse_args()
@@ -524,6 +832,8 @@ def main():
 
     if args.f == "json":
         write_json(data, args.o)
+    elif args.f == "html":
+        write_html(data, args.o)
     else:
         write_text(data, args.o)
 

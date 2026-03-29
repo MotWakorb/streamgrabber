@@ -1,6 +1,6 @@
 # StreamGrabber
 
-A command-line tool that retrieves all categories and streams from an Xtream Codes server or M3U playlist and saves them to a JSON or text file.
+A command-line tool that retrieves all categories and streams from an Xtream Codes server or M3U playlist and saves them to JSON, text, or an interactive HTML page.
 
 ## Requirements
 
@@ -33,7 +33,7 @@ python streamgrabber.py http://example.com:8080 -u myuser -p mypass
 | `-u USER` | Account username (XC API mode) | prompt |
 | `-p PASS` | Account password (XC API mode) | prompt (masked) |
 | `-t TYPE [...]` | Stream types: `live`, `vod`, `series` | prompt / all |
-| `-f FMT` | Output format: `json` or `text` | `json` |
+| `-f FMT` | Output format: `json`, `text`, or `html` | `json` |
 | `-o FILE` | Output file path | `streams_output.json` |
 | `-h` | Show help message | |
 
@@ -53,12 +53,14 @@ python streamgrabber.py -m playlist.m3u
 python streamgrabber.py -m playlist.m3u -d
 python streamgrabber.py -m http://example.com/get.php?username=user&password=pass&type=m3u_plus
 python streamgrabber.py -m playlist.m3u -t live -f text -o streams.txt
+python streamgrabber.py -m playlist.m3u -f html -o streams.html
 ```
 
-Output as human-readable text:
+Output as human-readable text or HTML:
 
 ```
 python streamgrabber.py http://example.com:8080 -u user -p pass -f text -o streams.txt
+python streamgrabber.py http://example.com:8080 -u user -p pass -f html -o streams.html
 ```
 
 ## Output
@@ -104,6 +106,17 @@ python streamgrabber.py http://example.com:8080 -u user -p pass -f text -o strea
      2. Fox Sports 1
      ...
 ```
+
+### HTML format
+
+A self-contained interactive page with:
+
+- Dark themed UI with collapsible categories
+- Live search across all streams with match count
+- Lazy rendering — streams load into the DOM only when a category is expanded or searched, so even 30k+ stream playlists load instantly
+- Stream icons displayed where available
+- Dedup counts shown when using `-d`
+- Responsive layout for mobile
 
 ## M3U parsing
 
