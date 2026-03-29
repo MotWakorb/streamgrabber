@@ -30,6 +30,7 @@ python streamgrabber.py http://example.com:8080 -u myuser -p mypass
 | `url` | Server URL (positional, for XC API mode) | prompt |
 | `-m M3U` | M3U file path or URL (skips XC API) | |
 | `-d` | Deduplicate streams by URL (M3U mode, keeps first) | off |
+| `-l` | Include stream URLs in output | off |
 | `-u USER` | Account username (XC API mode) | prompt |
 | `-p PASS` | Account password (XC API mode) | prompt (masked) |
 | `-t TYPE [...]` | Stream types: `live`, `vod`, `series` | prompt / all |
@@ -52,8 +53,8 @@ python streamgrabber.py http://example.com:8080 -u user -p pass -t live vod
 python streamgrabber.py -m playlist.m3u
 python streamgrabber.py -m playlist.m3u -d
 python streamgrabber.py -m http://example.com/get.php?username=user&password=pass&type=m3u_plus
+python streamgrabber.py -m playlist.m3u -l -f html -o streams.html
 python streamgrabber.py -m playlist.m3u -t live -f text -o streams.txt
-python streamgrabber.py -m playlist.m3u -f html -o streams.html
 ```
 
 Output as human-readable text or HTML:
@@ -61,6 +62,7 @@ Output as human-readable text or HTML:
 ```
 python streamgrabber.py http://example.com:8080 -u user -p pass -f text -o streams.txt
 python streamgrabber.py http://example.com:8080 -u user -p pass -f html -o streams.html
+python streamgrabber.py http://example.com:8080 -u user -p pass -l
 ```
 
 ## Output

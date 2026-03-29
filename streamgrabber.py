@@ -100,7 +100,18 @@ def get_streams(server_url, username, password, stream_type, category_id=None):
     return resp.json() or []
 
 
-def gather_all(server_url, username, password, stream_types=None):
+def build_stream_url(server_url, username, password, stream_type, stream_id, extension=""):
+    """Build a playback URL for an Xtream Codes stream."""
+    base = server_url.rstrip("/")
+    path_map = {"live": "live", "vod": "movie", "series": "series"}
+    path = path_map.get(stream_type, stream_type)
+    if stream_type == "live":
+        return f"{base}/{path}/{username}/{password}/{stream_id}.ts"
+    ext = extension or "mp4"
+    return f"{base}/{path}/{username}/{password}/{stream_id}.{ext}"
+
+
+def gather_all(server_url, username, password, stream_types=None, include_urls=False):
     """Gather all categories and streams, grouped by type and category."""
     if stream_types is None:
         stream_types = ["live", "vod", "series"]
@@ -135,6 +146,12 @@ def gather_all(server_url, username, password, stream_types=None):
                     entry["cover"] = s.get("cover", "")
                     entry["rating"] = s.get("rating", "")
                     entry["last_modified"] = s.get("last_modified", "")
+
+                if include_urls and entry["stream_id"]:
+                    entry["url"] = build_stream_url(
+                        server_url, username, password, stype,
+                        entry["stream_id"], entry.get("container_extension", ""),
+                    )
 
                 stream_list.append(entry)
 
@@ -387,6 +404,8 @@ def write_text(data, output_path):
                     f.write(f"--- {group['category_name']} ({group['stream_count']} streams) ---\n")
                 for i, stream in enumerate(group["streams"], 1):
                     f.write(f"  {i:>4}. {stream['name']}\n")
+                    if stream.get("url"):
+                        f.write(f"        {stream['url']}\n")
                 f.write("\n")
 
             f.write("\n")
@@ -497,6 +516,8 @@ def write_html(data, output_path):
     background: var(--surface2); flex-shrink: 0; margin-right: .6rem;
   }
   .s-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+  a.s-link { color: var(--text); text-decoration: none; }
+  a.s-link:hover { color: var(--accent); text-decoration: underline; }
   .s-meta { color: var(--text2); font-size: .78rem; margin-left: .75rem;
             white-space: nowrap; flex-shrink: 0; }
   .no-results {
@@ -574,7 +595,10 @@ function renderStreamRow(stream, num) {
   const meta = metaParts.join(' \\u00b7 ');
   let h = `<div class="stream-row"><span class="s-num">${num}</span>`;
   if (icon) h += `<img class="s-icon" src="${esc(icon)}" alt="" loading="lazy" onerror="this.style.display='none'">`;
-  h += `<span class="s-name">${esc(stream.name||'Unknown')}</span>`;
+  if (stream.url)
+    h += `<a class="s-name s-link" href="${esc(stream.url)}" target="_blank">${esc(stream.name||'Unknown')}</a>`;
+  else
+    h += `<span class="s-name">${esc(stream.name||'Unknown')}</span>`;
   if (meta) h += `<span class="s-meta">${meta}</span>`;
   h += '</div>';
   return h;
@@ -780,8 +804,9 @@ def main():
             "  %(prog)s -m playlist.m3u\n"
             "  %(prog)s -m http://example.com/get.php?username=user&password=pass&type=m3u_plus\n"
             "  %(prog)s -m playlist.m3u -d\n"
-            "  %(prog)s -m playlist.m3u -f html -o streams.html\n"
+            "  %(prog)s -m playlist.m3u -l -f html -o streams.html\n"
             "  %(prog)s -m playlist.m3u -f text -o streams.txt\n"
+            "  %(prog)s http://example.com:8080 -u user -p pass -l\n"
             "  %(prog)s                (run with no arguments for interactive prompts)"
         ),
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -791,6 +816,8 @@ def main():
                         help="M3U file path or URL (skips XC API, parses playlist directly)")
     parser.add_argument("-d", action="store_true",
                         help="deduplicate streams by URL (M3U mode only, keeps first occurrence)")
+    parser.add_argument("-l", action="store_true",
+                        help="include stream URLs in output (built from XC credentials, already present for M3U)")
     parser.add_argument("-u", default=None, metavar="USER", help="account username")
     parser.add_argument("-p", default=None, metavar="PASS", help="account password")
     parser.add_argument("-t", nargs="+", choices=["live", "vod", "series"], default=None,
@@ -812,6 +839,13 @@ def main():
         except (OSError, IOError) as e:
             print(f"File error: {e}", file=sys.stderr)
             sys.exit(1)
+
+        # Strip URLs if -l not set
+        if not args.l:
+            for info in data.values():
+                for cat in info["categories"]:
+                    for stream in cat["streams"]:
+                        stream.pop("url", None)
 
         # Filter by stream types if specified
         if args.t:
@@ -846,7 +880,7 @@ def main():
         )
 
         print("Fetching streams...", file=sys.stderr)
-        data = gather_all(args.url, args.u, args.p, args.t)
+        data = gather_all(args.url, args.u, args.p, args.t, include_urls=args.l)
 
     sort_data(data)
 
